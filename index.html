@@ -487,7 +487,7 @@
                 const uid = userCredential.user.uid;
 
                 // Generar publicId único
-                const publicId = generatePublicId();
+                const publicId = await generatePublicId();
 
                 // Crear documento en Firestore
                 await setDoc(doc(db, 'users', uid), {
@@ -495,7 +495,7 @@
                     name: name,
                     email: email,
                     publicId: publicId,
-                    balance: 100.00,
+                    saldo: 100,
                     createdAt: serverTimestamp(),
                     transactions: []
                 });
@@ -588,9 +588,9 @@
                     const userData = userDocSnap.data();
                     document.getElementById('userName').textContent = userData.name;
                     document.getElementById('userPublicId').textContent = `ID: ${userData.publicId}`;
-                    document.getElementById('userBalance').textContent = `$${userData.balance.toFixed(2)}`;
+                    document.getElementById('userBalance').textContent = `$${(userData.saldo || 0).toFixed(2)}`;
                     document.getElementById('dashPublicId').textContent = userData.publicId;
-                    document.getElementById('dashBalance').textContent = `$${userData.balance.toFixed(2)}`;
+                    document.getElementById('dashBalance').textContent = `$${(userData.saldo || 0).toFixed(2)}`;
                 }
             } catch (error) {
                 console.error('Error cargando datos:', error);
@@ -659,10 +659,10 @@
                         throw new Error('Usuario no encontrado');
                     }
 
-                    const senderBalance = senderSnap.data().balance;
+                    const senderBalance = senderSnap.data().saldo;
                     const senderName = senderSnap.data().name;
 
-                    if (senderBalance < amount) {
+                    if ((senderBalance || 0) < amount) {
                         throw new Error('Fondos insuficientes');
                     }
 
@@ -681,7 +681,7 @@
 
                     // Actualizar saldo del remitente (débito)
                     transaction.update(senderRef, {
-                        balance: senderSnap.data().balance - amount,
+                        saldo: (senderSnap.data().saldo || 0) - amount,
                         transactions: arrayUnion({
                             ...transactionRecord,
                             direction: 'out'
@@ -690,7 +690,7 @@
 
                     // Actualizar saldo del destinatario (crédito)
                     transaction.update(recipientRef, {
-                        balance: recipientSnap.data().balance + amount,
+                        saldo: (recipientSnap.data().saldo || 0) + amount,
                         transactions: arrayUnion({
                             ...transactionRecord,
                             direction: 'in'
