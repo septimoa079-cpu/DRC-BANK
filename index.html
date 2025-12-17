@@ -412,17 +412,18 @@
         } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-auth.js";
         import { 
             getFirestore, 
-            doc, 
-            setDoc, 
-            getDoc,
-            updateDoc,
-            collection,
-            query,
-            where,
-            getDocs,
-            runTransaction,
-            arrayUnion,
-            serverTimestamp
+                doc, 
+                setDoc, 
+                getDoc,
+                updateDoc,
+                collection,
+                query,
+                where,
+                getDocs,
+                runTransaction,
+                arrayUnion,
+                serverTimestamp,
+                onSnapshot
         } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
 
         // ==================== CONFIGURACIÓN FIREBASE ====================
@@ -442,16 +443,24 @@
 
         // ==================== VARIABLES GLOBALES ====================
         let currentUser = null;
+        let unsubscribeUser = null;
 
         // ==================== INICIALIZACIÓN ====================
         // Verificar usuario al cargar la página
         onAuthStateChanged(auth, async (user) => {
             if (user) {
                 currentUser = user;
+                // Escuchar cambios en tiempo real para este usuario
+                escucharUsuario(user.uid);
                 await loadUserData();
                 showMainScreen();
             } else {
                 currentUser = null;
+                // Si hay un listener activo lo desenlazamos
+                if (unsubscribeUser) {
+                    try { unsubscribeUser(); } catch (e) { /* ignore */ }
+                    unsubscribeUser = null;
+                }
                 showAuthScreen();
             }
         });
@@ -810,6 +819,43 @@
             }
 
             return publicId;
+        }
+
+        /**
+         * Escucha en tiempo real los cambios del documento del usuario
+         * y actualiza la UI automáticamente (saldo y publicId).
+         */
+        function escucharUsuario(uid) {
+            const userRef = doc(db, 'users', uid);
+
+            // Si ya hay un listener activo, lo cerramos
+            if (unsubscribeUser) {
+                try { unsubscribeUser(); } catch (e) { /* ignore */ }
+                unsubscribeUser = null;
+            }
+
+            unsubscribeUser = onSnapshot(userRef, (docSnap) => {
+                if (!docSnap || !docSnap.exists()) return;
+                const data = docSnap.data();
+
+                const saldoVal = (data.saldo || 0).toFixed(2);
+                const publicIdVal = data.publicId || '-';
+
+                // IDs que actualizamos para compatibilidad
+                const balanceIds = ['userBalance', 'dashBalance', 'saldo'];
+                balanceIds.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = `$${saldoVal}`;
+                });
+
+                const publicIds = ['dashPublicId', 'userPublicId', 'publicId'];
+                publicIds.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (el) el.textContent = publicIdVal;
+                });
+            }, (err) => {
+                console.error('onSnapshot error:', err);
+            });
         }
 
         /**
