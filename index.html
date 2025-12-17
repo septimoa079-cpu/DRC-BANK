@@ -348,6 +348,38 @@
                     <button class="tab-btn" onclick="handleLogout()">Salir</button>
                 </div>
 
+                                <!-- Panel admin (oculto por defecto, se muestra si el usuario es admin) -->
+                                <div id="adminPanel" style="display:none; border:2px solid red; padding:10px; margin-top:12px;">
+                                    <h3>👑 PANEL ADMIN</h3>
+
+                                    <div style="display:flex; gap:8px; margin-bottom:8px;">
+                                        <button class="btn-secondary" onclick="cargarUsuarios()">📋 Ver usuarios</button>
+                                        <button class="btn-secondary" onclick="mostrarRanking()">📊 Ranking</button>
+                                    </div>
+
+                                    <hr>
+
+                                    <h4>💸 Modificar saldo</h4>
+                                    <div style="display:flex; gap:8px; margin-bottom:8px;">
+                                        <input id="saldoUid" placeholder="UID del usuario" style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px;">
+                                        <input id="saldoMonto" type="number" placeholder="Monto (+ o -)" style="width:140px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+                                        <button class="btn-primary" onclick="modificarSaldo()">Aplicar</button>
+                                    </div>
+
+                                    <hr>
+
+                                    <h4>🧊 Congelar por tiempo (minutos)</h4>
+                                    <div style="display:flex; gap:8px; margin-bottom:8px;">
+                                        <input id="freezeUid" placeholder="UID del usuario" style="flex:1; padding:8px; border:1px solid #ddd; border-radius:6px;">
+                                        <input id="freezeMin" type="number" placeholder="Minutos" style="width:120px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+                                        <button class="btn-primary" onclick="congelarTiempo()">Congelar</button>
+                                    </div>
+
+                                    <hr>
+
+                                    <div id="adminOutput" style="max-height:200px; overflow:auto;"></div>
+                                </div>
+
                 <!-- Tab: Dashboard -->
                 <div id="dashboardTab" class="tab-content active">
                     <div class="user-card">
@@ -359,6 +391,7 @@
                     <div class="user-card">
                         <div class="user-card-label">Saldo disponible</div>
                         <div class="user-card-value" id="dashBalance">$0.00</div>
+                        <div id="freezeBadge" style="display:none; margin-top:8px; color:#b71c1c; font-weight:700;">❄️ Cuenta congelada</div>
                     </div>
 
                     <div style="background: #f0f4ff; padding: 15px; border-radius: 8px; margin-top: 15px; font-size: 13px; color: #333; line-height: 1.6;">
@@ -423,7 +456,9 @@
                 runTransaction,
                 arrayUnion,
                 serverTimestamp,
-                onSnapshot
+                onSnapshot,
+                orderBy,
+                limit
         } from "https://www.gstatic.com/firebasejs/11.0.0/firebase-firestore.js";
 
         // ==================== CONFIGURACIÓN FIREBASE ====================
@@ -444,6 +479,7 @@
         // ==================== VARIABLES GLOBALES ====================
         let currentUser = null;
         let unsubscribeUser = null;
+        let currentUserData = null; // Datos del usuario cargados/actualizados en tiempo real
 
         // ==================== INICIALIZACIÓN ====================
         // Verificar usuario al cargar la página
@@ -461,6 +497,7 @@
                     try { unsubscribeUser(); } catch (e) { /* ignore */ }
                     unsubscribeUser = null;
                 }
+                currentUserData = null;
                 showAuthScreen();
             }
         });
@@ -595,11 +632,44 @@
 
                 if (userDocSnap.exists()) {
                     const userData = userDocSnap.data();
+
+                    // Valores por defecto (por si no existen en Firestore)
+                    userData.isAdmin = userData.isAdmin === true;
+                    userData.cuentaCongelada = userData.cuentaCongelada === true;
+
+                    // Guardar en memoria para comprobaciones (p.ej. bloqueo de transferencias)
+                    currentUserData = userData;
+
                     document.getElementById('userName').textContent = userData.name;
                     document.getElementById('userPublicId').textContent = `ID: ${userData.publicId}`;
                     document.getElementById('userBalance').textContent = `$${(userData.saldo || 0).toFixed(2)}`;
                     document.getElementById('dashPublicId').textContent = userData.publicId;
                     document.getElementById('dashBalance').textContent = `$${(userData.saldo || 0).toFixed(2)}`;
+
+                    // Mostrar panel admin si corresponde
+                    const adminPanel = document.getElementById('adminPanel');
+                    if (adminPanel) {
+                        adminPanel.style.display = userData.isAdmin ? 'block' : 'none';
+                    }
+
+                    // Mostrar badge de cuenta congelada si aplica
+                    const badge = document.getElementById('freezeBadge');
+                    if (badge) {
+                        if (userData.cuentaCongelada) {
+                            let text = '❄️ Cuenta congelada';
+                            if (userData.congeladoHasta) {
+                                const remaining = userData.congeladoHasta - Date.now();
+                                if (remaining > 0) {
+                                    const mins = Math.ceil(remaining / 60000);
+                                    text += ` — ${mins} min.`;
+                                }
+                            }
+                            badge.textContent = text;
+                            badge.style.display = 'block';
+                        } else {
+                            badge.style.display = 'none';
+                        }
+                    }
                 }
             } catch (error) {
                 console.error('Error cargando datos:', error);
@@ -616,6 +686,12 @@
         async function handleTransfer() {
             if (!currentUser) {
                 showAlert('Debes estar autenticado', 'error');
+                return;
+            }
+
+            // Bloquear transferencias si la cuenta del remitente está congelada
+            if (currentUserData && currentUserData.cuentaCongelada) {
+                showAlert('❌ Tu cuenta está congelada por el administrador', 'error');
                 return;
             }
 
@@ -834,9 +910,35 @@
                 unsubscribeUser = null;
             }
 
-            unsubscribeUser = onSnapshot(userRef, (docSnap) => {
+            unsubscribeUser = onSnapshot(userRef, async (docSnap) => {
                 if (!docSnap || !docSnap.exists()) return;
                 const data = docSnap.data();
+
+                // Valores por defecto (por si no existen en Firestore)
+                data.isAdmin = data.isAdmin === true;
+                data.cuentaCongelada = data.cuentaCongelada === true;
+
+                    // Guardar en memoria (usado por ejemplo para bloquear transferencias)
+                    currentUserData = data;
+
+                    // Mostrar badge de cuenta congelada si aplica (y mostrar tiempo restante si está disponible)
+                    const badge = document.getElementById('freezeBadge');
+                    if (badge) {
+                        if (data.cuentaCongelada) {
+                            let text = '❄️ Cuenta congelada';
+                            if (data.congeladoHasta) {
+                                const remaining = data.congeladoHasta - Date.now();
+                                if (remaining > 0) {
+                                    const mins = Math.ceil(remaining / 60000);
+                                    text += ` — ${mins} min.`;
+                                }
+                            }
+                            badge.textContent = text;
+                            badge.style.display = 'block';
+                        } else {
+                            badge.style.display = 'none';
+                        }
+                    }
 
                 const saldoVal = (data.saldo || 0).toFixed(2);
                 const publicIdVal = data.publicId || '-';
@@ -853,6 +955,28 @@
                     const el = document.getElementById(id);
                     if (el) el.textContent = publicIdVal;
                 });
+
+                // Mostrar/ocultar panel admin según privilegios
+                const adminPanel = document.getElementById('adminPanel');
+                if (adminPanel) {
+                    adminPanel.style.display = data.isAdmin ? 'block' : 'none';
+                }
+
+                // Descongelado automático si expiró el tiempo (solo para el usuario que recibe el snapshot)
+                if (data.cuentaCongelada && data.congeladoHasta) {
+                    try {
+                        if (Date.now() > data.congeladoHasta) {
+                            if (auth.currentUser && auth.currentUser.uid === uid) {
+                                await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+                                    cuentaCongelada: false,
+                                    congeladoHasta: null
+                                });
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Error auto-descongelando:', e);
+                    }
+                }
             }, (err) => {
                 console.error('onSnapshot error:', err);
             });
@@ -947,6 +1071,118 @@
             });
         }
 
+        // ==================== FUNCIONES ADMIN ====================
+        async function congelar() {
+            const uid = document.getElementById('adminUid').value.trim();
+            if (!uid) return showAlert('UID vacío', 'error');
+
+            try {
+                await updateDoc(doc(db, 'users', uid), {
+                    cuentaCongelada: true
+                });
+                showAlert('Cuenta congelada', 'success');
+            } catch (e) {
+                console.error('Error congelando cuenta:', e);
+                showAlert('Error: ' + e.message, 'error');
+            }
+        }
+
+        async function descongelar() {
+            const uid = document.getElementById('adminUid').value.trim();
+            if (!uid) return showAlert('UID vacío', 'error');
+
+            try {
+                await updateDoc(doc(db, 'users', uid), {
+                    cuentaCongelada: false
+                });
+                showAlert('Cuenta descongelada', 'success');
+            } catch (e) {
+                console.error('Error descongelando cuenta:', e);
+                showAlert('Error: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== FUNCIONES ADMIN AVANZADAS ====================
+        async function cargarUsuarios() {
+            try {
+                const snap = await getDocs(collection(db, 'users'));
+                let html = '<h4>Usuarios</h4><ul>';
+
+                snap.forEach(docu => {
+                    const u = docu.data();
+                    const saldo = (u.saldo || 0).toFixed(2);
+                    const estado = u.cuentaCongelada ? '🧊' : '🟢';
+                    html += `<li style="padding:6px 0; border-bottom:1px solid #eee;">${u.name || 'Sin nombre'} | UID: ${docu.id} | $${saldo} | ${estado}</li>`;
+                });
+
+                html += '</ul>';
+                document.getElementById('adminOutput').innerHTML = html;
+            } catch (e) {
+                console.error('Error cargando usuarios:', e);
+                showAlert('Error cargando usuarios', 'error');
+            }
+        }
+
+        async function modificarSaldo() {
+            const uid = document.getElementById('saldoUid').value.trim();
+            const monto = Number(document.getElementById('saldoMonto').value);
+            if (!uid || !monto) return showAlert('Datos incompletos', 'error');
+
+            try {
+                const ref = doc(db, 'users', uid);
+                const snap = await getDoc(ref);
+                if (!snap.exists()) return showAlert('Usuario no existe', 'error');
+
+                const nuevoSaldo = (snap.data().saldo || 0) + monto;
+                if (nuevoSaldo < 0) return showAlert('Saldo negativo no permitido', 'error');
+
+                await updateDoc(ref, { saldo: nuevoSaldo });
+                showAlert('Saldo actualizado', 'success');
+                cargarUsuarios();
+            } catch (e) {
+                console.error('Error modificando saldo:', e);
+                showAlert('Error: ' + e.message, 'error');
+            }
+        }
+
+        async function congelarTiempo() {
+            const uid = document.getElementById('freezeUid').value.trim();
+            const min = Number(document.getElementById('freezeMin').value);
+            if (!uid || !min) return showAlert('Datos incompletos', 'error');
+
+            try {
+                const hasta = Date.now() + min * 60000;
+                await updateDoc(doc(db, 'users', uid), {
+                    cuentaCongelada: true,
+                    congeladoHasta: hasta
+                });
+                showAlert(`Cuenta congelada por ${min} minutos`, 'success');
+                cargarUsuarios();
+            } catch (e) {
+                console.error('Error congelando por tiempo:', e);
+                showAlert('Error: ' + e.message, 'error');
+            }
+        }
+
+        async function mostrarRanking() {
+            try {
+                const q = query(collection(db, 'users'), orderBy('saldo', 'desc'), limit(10));
+                const snap = await getDocs(q);
+                let html = '<h4>🏆 Ranking</h4><ol>';
+
+                snap.forEach(docu => {
+                    const u = docu.data();
+                    html += `<li style="padding:4px 0;">${u.name || '?'} — $${(u.saldo||0).toFixed(2)}</li>`;
+                });
+
+                html += '</ol>';
+                document.getElementById('adminOutput').innerHTML = html;
+            } catch (e) {
+                console.error('Error mostrando ranking:', e);
+                showAlert('Error: ' + e.message, 'error');
+            }
+        }
+
         // Exponer funciones globales
         window.handleLogin = handleLogin;
         window.handleRegister = handleRegister;
@@ -956,6 +1192,12 @@
         window.switchMainTab = switchMainTab;
         window.copyToClipboard = copyToClipboard;
         window.loadTransactionHistory = loadTransactionHistory;
+        window.congelar = congelar;
+        window.descongelar = descongelar;
+        window.cargarUsuarios = cargarUsuarios;
+        window.modificarSaldo = modificarSaldo;
+        window.congelarTiempo = congelarTiempo;
+        window.mostrarRanking = mostrarRanking;
 
     </script>
 </body>
