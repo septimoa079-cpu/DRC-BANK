@@ -1,9 +1,6 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <link rel="icon" type="image/png" href="Logo GitHub V2.png">
-<link rel="apple-touch-icon" href="Logo GitHub V2.png">
-<meta name="theme-color" content="#d4af37">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Banco DRC - Firebase</title>
@@ -483,6 +480,7 @@
         let currentUser = null;
         let unsubscribeUser = null;
         let currentUserData = null; // Datos del usuario cargados/actualizados en tiempo real
+        let previousSaldo = null; // Saldo anterior para detectar cambios anómalos (sin transacción)
 
         // ==================== INICIALIZACIÓN ====================
         // Verificar usuario al cargar la página
@@ -501,6 +499,7 @@
                     unsubscribeUser = null;
                 }
                 currentUserData = null;
+                previousSaldo = null;
                 showAuthScreen();
             }
         });
@@ -980,6 +979,51 @@
                         console.error('Error auto-descongelando:', e);
                     }
                 }
+
+                // ===== DETECTOR DE ANOMALÍA DE SALDO (sin transacción correspondiente) =====
+                // Comparar saldo anterior vs saldo nuevo para detectar cambios no autorizados
+                if (previousSaldo !== null && previousSaldo !== data.saldo) {
+                    const saldoAnterior = previousSaldo;
+                    const saldoNuevo = data.saldo;
+                    const diferencia = saldoNuevo - saldoAnterior;
+
+                    // Verificar si hay una transacción reciente (últimos 10 segundos) que explique el cambio
+                    const txRecientes = (data.transactions || []).filter(tx => {
+                        const txTime = new Date(tx.timestamp).getTime();
+                        const ahora = Date.now();
+                        return (ahora - txTime) < 10000; // Últimos 10 segundos
+                    });
+
+                    // Si el saldo cambió pero no hay transacción reciente, es una anomalía
+                    const txExplicaCambio = txRecientes.some(tx => {
+                        const monto = tx.direction === 'in' ? tx.amount : -tx.amount;
+                        return Math.abs(monto - diferencia) < 0.01; // Permitir pequeños errores de redondeo
+                    });
+
+                    if (!txExplicaCambio) {
+                        // ANOMALÍA DETECTADA: saldo cambió sin transacción correspondiente
+                        const mensaje = `⚠️ CAMBIO DE SALDO NO VERIFICADO\n\nSaldo anterior: $${saldoAnterior.toFixed(2)}\nSaldo actual: $${saldoNuevo.toFixed(2)}\nDiferencia: ${diferencia >= 0 ? '+' : ''}$${diferencia.toFixed(2)}\n\nEste cambio no tiene una transacción registrada. Un administrador ha sido notificado.`;
+                        showAlert(mensaje, 'error');
+                        console.warn('Anomalía de saldo detectada:', { saldoAnterior, saldoNuevo, diferencia });
+
+                        // Marcar el documento en Firestore para que el admin lo investigue
+                        try {
+                            if (auth.currentUser && auth.currentUser.uid === uid) {
+                                await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+                                    flagged: true,
+                                    lastSaldo: saldoAnterior,
+                                    flaggedAt: serverTimestamp(),
+                                    anomalyDifference: diferencia
+                                });
+                            }
+                        } catch (e) {
+                            console.error('Error marcando anomalía:', e);
+                        }
+                    }
+                }
+
+                // Guardar el saldo actual como anterior para la siguiente comparación
+                previousSaldo = data.saldo;
             }, (err) => {
                 console.error('onSnapshot error:', err);
             });
@@ -1205,5 +1249,3 @@
     </script>
 </body>
 </html>
-
-
