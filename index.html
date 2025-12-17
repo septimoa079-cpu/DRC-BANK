@@ -4,6 +4,9 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Banco DRC - Firebase</title>
+    <link rel="icon" type="image/png" href="Logo GitHub V2.png">
+    <link rel="apple-touch-icon" href="Logo GitHub V2.png">
+    <meta name="theme-color" content="#d4af37">
     <style>
         * {
             margin: 0;
@@ -423,6 +426,11 @@
                     <button class="btn-primary" onclick="handleTransfer()">
                         <span id="transferBtnText">Transferir dinero</span>
                     </button>
+
+                    <div style="margin-top:20px; margin-bottom:15px;">
+                        <h4 style="margin-bottom:10px;">💫 Transferencias recientes</h4>
+                        <div id="recientesContainer" style="display:flex; gap:8px; flex-wrap:wrap;"></div>
+                    </div>
                 </div>
 
                 <!-- Tab: Historial -->
@@ -786,6 +794,11 @@
                 });
 
                 showAlert(`✓ Transferencia de $${amount.toFixed(2)} enviada a ${recipientData.name}`, 'success');
+                
+                // Guardar como reciente
+                guardarTransferenciaReciente(recipientPublicId, recipientData.name);
+                cargarRecientes();
+                
                 document.getElementById('transferTo').value = '';
                 document.getElementById('transferAmount').value = '';
                 await loadUserData();
@@ -1067,6 +1080,11 @@
                 if (tab === 'history') {
                     await loadTransactionHistory();
                 }
+
+                // Cargar recientes cuando se abre transferencias
+                if (tab === 'transfer') {
+                    cargarRecientes();
+                }
             }
         }
 
@@ -1116,6 +1134,103 @@
             navigator.clipboard.writeText(publicId).then(() => {
                 showAlert('Public ID copiado al portapapeles', 'success');
             });
+        }
+
+        // ==================== SISTEMA DE RECIENTES ====================
+        const STORAGE_KEY = 'banco_recientes_transferencias';
+        const MAX_RECIENTES = 5;
+
+        /**
+         * Guarda una transferencia reciente en LocalStorage
+         * - Evita duplicados
+         * - Mantiene máximo 5 registros
+         */
+        function guardarTransferenciaReciente(publicId, name) {
+            try {
+                let recientes = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+
+                // Filtrar: eliminar si ya existe este publicId
+                recientes = recientes.filter(r => r.publicId !== publicId);
+
+                // Agregar al inicio (más reciente)
+                recientes.unshift({ publicId, name, timestamp: Date.now() });
+
+                // Limitar a MAX_RECIENTES
+                recientes = recientes.slice(0, MAX_RECIENTES);
+
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(recientes));
+                console.log('Reciente guardado:', publicId);
+            } catch (e) {
+                console.error('Error guardando reciente:', e);
+            }
+        }
+
+        /**
+         * Carga y dibuja los botones de transferencias recientes
+         */
+        function cargarRecientes() {
+            try {
+                const container = document.getElementById('recientesContainer');
+                if (!container) return;
+
+                const recientes = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
+
+                if (recientes.length === 0) {
+                    container.innerHTML = '<span style="color:#999; font-size:12px;">Sin transferencias recientes</span>';
+                    return;
+                }
+
+                container.innerHTML = '';
+
+                recientes.forEach(r => {
+                    const btn = document.createElement('button');
+                    btn.style.cssText = `
+                        background: #f0f4ff;
+                        color: #667eea;
+                        border: 1px solid #667eea;
+                        padding: 8px 12px;
+                        border-radius: 20px;
+                        font-size: 12px;
+                        cursor: pointer;
+                        transition: all 0.3s;
+                        white-space: nowrap;
+                        width: auto;
+                    `;
+                    btn.innerHTML = `${r.name} <span style="opacity:0.7;">(${r.publicId})</span>`;
+
+                    btn.addEventListener('mouseover', () => {
+                        btn.style.background = '#e8ecff';
+                        btn.style.transform = 'scale(1.05)';
+                    });
+                    btn.addEventListener('mouseout', () => {
+                        btn.style.background = '#f0f4ff';
+                        btn.style.transform = 'scale(1)';
+                    });
+
+                    btn.addEventListener('click', () => {
+                        document.getElementById('transferTo').value = r.publicId;
+                        document.getElementById('transferAmount').focus();
+                        showAlert(`💫 Rellenado: ${r.name}`, 'info');
+                    });
+
+                    container.appendChild(btn);
+                });
+            } catch (e) {
+                console.error('Error cargando recientes:', e);
+            }
+        }
+
+        /**
+         * Limpiar recientes (opcional, para admin)
+         */
+        function limpiarRecientes() {
+            try {
+                localStorage.removeItem(STORAGE_KEY);
+                cargarRecientes();
+                showAlert('Recientes borrados', 'info');
+            } catch (e) {
+                console.error('Error limpiando recientes:', e);
+            }
         }
 
         // ==================== FUNCIONES ADMIN ====================
@@ -1245,6 +1360,9 @@
         window.modificarSaldo = modificarSaldo;
         window.congelarTiempo = congelarTiempo;
         window.mostrarRanking = mostrarRanking;
+        window.guardarTransferenciaReciente = guardarTransferenciaReciente;
+        window.cargarRecientes = cargarRecientes;
+        window.limpiarRecientes = limpiarRecientes;
 
     </script>
 </body>
