@@ -1039,11 +1039,23 @@
                         // Marcar el documento en Firestore para que el admin lo investigue
                         try {
                             if (auth.currentUser && auth.currentUser.uid === uid) {
+                                // 1. Actualizar documento del usuario
                                 await updateDoc(doc(db, 'users', auth.currentUser.uid), {
                                     flagged: true,
                                     lastSaldo: saldoAnterior,
                                     flaggedAt: serverTimestamp(),
                                     anomalyDifference: diferencia
+                                });
+
+                                // 2. Crear evento en suspicious_events para que aparezca en la pestaña SOSPECHOSO
+                                await setDoc(doc(collection(db, 'suspicious_events')), {
+                                    timestamp: Date.now(),
+                                    uid: uid,
+                                    userName: data.name || 'Usuario desconocido',
+                                    type: 'saldo_modificado',
+                                    detail: `Saldo cambió de $${saldoAnterior.toFixed(2)} a $${saldoNuevo.toFixed(2)} sin transacción registrada (diferencia: ${diferencia >= 0 ? '+' : ''}$${diferencia.toFixed(2)})`,
+                                    investigated: false,
+                                    createdAt: serverTimestamp()
                                 });
                             }
                         } catch (e) {
